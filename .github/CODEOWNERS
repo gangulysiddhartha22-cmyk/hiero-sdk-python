@@ -28,10 +28,10 @@
 # Must be placed last to ensure enforcement over all other rules
 
 # GitHub configuration and workflows
-/.github/**                                    @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers
+/.github/**                                    @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers @hiero-ledger/hiero-automation
 /.github/ISSUE_TEMPLATE/**                     @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers
-/.github/scripts/**                            @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers
-/.github/workflows/**                          @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers
+/.github/scripts/**                            @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers @hiero-ledger/hiero-automation
+/.github/workflows/**                          @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers @hiero-ledger/hiero-automation
 
 # Python packaging & build system
 /pyproject.toml                                @hiero-ledger/hiero-sdk-python-maintainers @hiero-ledger/github-maintainers @hiero-ledger/tsc

@@ -1,0 +1,132 @@
+name: Dependabot Changelog Entry
+
+on:
+  pull_request:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (no file changes)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  add-changelog-entry:
+    concurrency:
+      group: dependabot-changelog-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.user.login == 'dependabot[bot]' ||
+      github.event.pull_request.user.login == 'dependabot-preview[bot]' ||
+      contains(github.event.pull_request.labels.*.name, 'test-dependabot-workflow')
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_ACCESS_TOKEN }}
+
+      - name: Import GPG key
+        id: gpg_importer
+        uses: step-security/ghaction-import-gpg@69c854a83c7f79463f8bdf46772ab09826c560cd # v6.3.1
+        with:
+          git_commit_gpgsign: true
+          git_tag_gpgsign: true
+          git_user_signingkey: true
+          gpg_private_key: ${{ secrets.GPG_KEY_CONTENTS }}
+          passphrase: ${{ secrets.GPG_KEY_PASSPHRASE }}
+
+      - name: Prepare variables
+        id: prepare
+        env:
+          PR_TITLE: "${{ github.event.pull_request.title || 'Dry-run: Bump test-pkg from 1.0.0 to 2.0.0' }}"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Safe changed-files diff: full PR diff (base..head), fallback to last commit
+          if [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]]; then
+            CHANGED=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || echo "")
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          fi
+
+          if echo "$CHANGED" | grep -qE '^\.github/'; then
+            SUBSECTION=".github"
+          elif echo "$CHANGED" | grep -qE '^(src|lib|proto|examples|tests)/|^pyproject\.toml$|^poetry\.lock$|^requirements.*\.txt$'; then
+            SUBSECTION="Src"
+          else
+            SUBSECTION=".github"  # default for Dependabot bumps (lock files, etc.)
+          fi
+
+          TITLE="$PR_TITLE"
+          MAIN=$(echo "$TITLE" | sed -E 's/^(build|chore|deps|fix|test)\(.*\): *//i')
+          if [[ "$MAIN" =~ ^Bump\ (.+)\ from\ (.+)\ to\ (.+)$ ]]; then
+            ENTRY="chore(deps): bump ${BASH_REMATCH[1]} from ${BASH_REMATCH[2]} to ${BASH_REMATCH[3]}"
+          else
+            ENTRY="chore(deps): $MAIN"
+          fi
+
+          # Safe outputs with delimiters (handles newlines/special chars in ENTRY)
+          {
+            echo "subsection<<EOF"
+            echo "$SUBSECTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "entry<<EOF"
+            echo "$ENTRY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          PR_NUM="${{ github.event.pull_request.number }}"
+          echo "pr_number=${PR_NUM:-dry-run}" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        env:
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run != false) || vars.DRY_RUN == 'true' }}
+          CHANGELOG_ENTRY: ${{ steps.prepare.outputs.entry }}
+          PR_NUMBER: ${{ steps.prepare.outputs.pr_number }}
+          SUBSECTION: ${{ steps.prepare.outputs.subsection }}
+        run: |
+          node .github/scripts/add-dependabot-changelog.js \
+            "$DRY_RUN" \
+            "$CHANGELOG_ENTRY" \
+            "$PR_NUMBER" \
+            "$SUBSECTION" 
+          if [[ "$DRY_RUN" != "true" ]]; then
+            git add CHANGELOG.md
+            git diff --staged --quiet && echo "No change" && exit 0
+            git commit -S -s -m "chore: add dependabot entry (#${PR_NUMBER})"
+            git push
+          fi
+
+      - name: Assign service account as assignee
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run != false) || vars.DRY_RUN == 'true' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" != "false" ]] || \
+             [[ "${DRY_RUN:-false}" == "true" ]]; then
+            echo "[DRY-RUN] Would assign PR to SA: (derived from GH_ACCESS_TOKEN at runtime)"
+            exit 0
+          fi
+          SA_USERNAME=$(gh api user --jq '.login')
+          echo "Assigning PR #${PR_NUMBER} to SA: $SA_USERNAME"
+          gh pr edit "${PR_NUMBER}" \
+            --add-assignee "$SA_USERNAME" \
+            || echo "WARNING: Assignment failed"
